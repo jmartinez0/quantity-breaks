@@ -1,0 +1,128 @@
+{
+  "payload": {
+    "export": "cart-lines-discounts-generate-run",
+    "target": "cart.lines.discounts.generate.run",
+    "input": {
+      "cart": {
+        "lines": [
+          {
+            "id": "gid://shopify/CartLine/1",
+            "quantity": 2,
+            "cost": {
+              "subtotalAmount": {
+                "amount": "20.00"
+              }
+            },
+            "merchandise": {
+              "__typename": "ProductVariant",
+              "id": "gid://shopify/ProductVariant/101",
+              "product": {
+                "quantityBreaks": {
+                  "jsonValue": [
+                    {
+                      "title": "Buy 2+ get 5% off",
+                      "min_quantity": 2,
+                      "percent_off": 5
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "id": "gid://shopify/CartLine/2",
+            "quantity": 1,
+            "cost": {
+              "subtotalAmount": {
+                "amount": "10.00"
+              }
+            },
+            "merchandise": {
+              "__typename": "ProductVariant",
+              "id": "gid://shopify/ProductVariant/102",
+              "product": {
+                "quantityBreaks": {
+                  "jsonValue": [
+                    {
+                      "title": "Buy 2+ get 5% off",
+                      "min_quantity": 2,
+                      "percent_off": 5
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "id": "gid://shopify/CartLine/3",
+            "quantity": 2,
+            "cost": {
+              "subtotalAmount": {
+                "amount": "20.00"
+              }
+            },
+            "merchandise": {
+              "__typename": "ProductVariant",
+              "id": "gid://shopify/ProductVariant/103",
+              "product": {
+                "quantityBreaks": {
+                  "jsonValue": [
+                    {
+                      "title": "Buy 2+ get 5% off",
+                      "min_quantity": 2,
+                      "percent_off": 5
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      },
+      "discount": {
+        "discountClasses": ["PRODUCT"]
+      }
+    },
+    "output": {
+      "operations": [
+        {
+          "productDiscountsAdd": {
+            "candidates": [
+              {
+                "message": "Buy 2+ get 5% off",
+                "targets": [
+                  {
+                    "cartLine": {
+                      "id": "gid://shopify/CartLine/1"
+                    }
+                  }
+                ],
+                "value": {
+                  "percentage": {
+                    "value": 5
+                  }
+                }
+              },
+              {
+                "message": "Buy 2+ get 5% off",
+                "targets": [
+                  {
+                    "cartLine": {
+                      "id": "gid://shopify/CartLine/3"
+                    }
+                  }
+                ],
+                "value": {
+                  "percentage": {
+                    "value": 5
+                  }
+                }
+              }
+            ],
+            "selectionStrategy": "ALL"
+          }
+        }
+      ]
+    }
+  }
+}

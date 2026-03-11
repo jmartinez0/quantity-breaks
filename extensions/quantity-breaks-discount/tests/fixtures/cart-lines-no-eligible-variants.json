@@ -1,0 +1,42 @@
+{
+  "payload": {
+    "export": "cart-lines-discounts-generate-run",
+    "target": "cart.lines.discounts.generate.run",
+    "input": {
+      "cart": {
+        "lines": [
+          {
+            "id": "gid://shopify/CartLine/1",
+            "quantity": 1,
+            "cost": {
+              "subtotalAmount": {
+                "amount": "10.00"
+              }
+            },
+            "merchandise": {
+              "__typename": "ProductVariant",
+              "id": "gid://shopify/ProductVariant/101",
+              "product": {
+                "quantityBreaks": {
+                  "jsonValue": [
+                    {
+                      "title": "Buy 2+ get 5% off",
+                      "min_quantity": 2,
+                      "percent_off": 5
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      },
+      "discount": {
+        "discountClasses": ["PRODUCT"]
+      }
+    },
+    "output": {
+      "operations": []
+    }
+  }
+}

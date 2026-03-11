@@ -5,6 +5,9 @@ name = "Quantity Breaks"
 application_url = "https://jm-quantity-breaks.vercel.app"
 embedded = true
 
+[build]
+automatically_update_urls_on_dev = true
+
 [webhooks]
 api_version = "2026-04"
 
@@ -14,6 +17,3 @@ scopes = "read_products,write_discounts,write_products"
 
 [auth]
 redirect_urls = [ "https://jm-quantity-breaks.vercel.app/auth/callback" ]
-
-[build]
-automatically_update_urls_on_dev = true

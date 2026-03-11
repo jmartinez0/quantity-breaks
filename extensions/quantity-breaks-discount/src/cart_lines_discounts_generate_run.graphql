@@ -1,0 +1,27 @@
+query CartInput {
+  cart {
+    lines {
+      id
+      quantity
+      cost {
+        subtotalAmount {
+          amount
+        }
+      }
+      merchandise {
+        __typename
+        ... on ProductVariant {
+          id
+          product {
+            quantityBreaks: metafield(namespace: "quantity_breaks", key: "discounts") {
+              jsonValue
+            }
+          }
+        }
+      }
+    }
+  }
+  discount {
+    discountClasses
+  }
+}

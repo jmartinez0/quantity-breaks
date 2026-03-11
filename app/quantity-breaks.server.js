@@ -17,6 +17,22 @@ export const parseDiscountConfig = (value) => {
   }
 };
 
+export const normalizeStoredTier = (tier = {}) => {
+  const minQuantity = Number.parseInt(String(tier?.min_quantity ?? "").trim(), 10);
+  const percentOff = Number.parseInt(String(tier?.percent_off ?? "").trim(), 10);
+  const title = String(tier?.title || "").trim();
+
+  if (!title) return null;
+  if (!Number.isInteger(minQuantity) || minQuantity <= 0) return null;
+  if (!Number.isInteger(percentOff) || percentOff < 0 || percentOff > 100) return null;
+
+  return {
+    title,
+    min_quantity: minQuantity,
+    percent_off: percentOff,
+  };
+};
+
 export const normalizeProductId = (product) => {
   if (typeof product === "string" && product.startsWith("gid://shopify/Product/")) {
     return product;
@@ -96,23 +112,6 @@ export const getTierDiscountIds = (tier = {}, fallbackProductIds = []) =>
     .map((allocation) => allocation.discount_id)
     .filter(Boolean);
 
-const INVISIBLE_TITLE_ALPHABET = ["\u200B", "\u200C", "\u200D", "\u2060"];
-const INVISIBLE_TITLE_SEPARATOR = "\u2063";
-
-const encodeInvisibleProductToken = (productId) => {
-  const numericPart = String(productId || "").split("/").pop() || "0";
-  return numericPart
-    .split("")
-    .map((digit) => {
-      const index = Number.parseInt(digit, 10);
-      return Number.isInteger(index) ? INVISIBLE_TITLE_ALPHABET[index % 4] : INVISIBLE_TITLE_ALPHABET[0];
-    })
-    .join("");
-};
-
-export const buildShopifyAutomaticDiscountTitle = (baseTitle, productId) =>
-  `${String(baseTitle || "").trim()}${INVISIBLE_TITLE_SEPARATOR}${encodeInvisibleProductToken(productId)}`;
-
 export const getRuleProductIds = (rule = {}) => {
   const directProductIds = normalizeProductIds(rule.products);
   if (directProductIds.length > 0) return directProductIds;
@@ -131,22 +130,16 @@ export const getRuleProductIds = (rule = {}) => {
 };
 
 const normalizeTierForProjection = (tier = {}) => {
-  const minQuantity = Number.parseInt(String(tier?.min_quantity ?? "").trim(), 10);
-  const percentOff = Number(String(tier?.percent_off ?? "").trim());
-
-  if (!Number.isInteger(minQuantity) || minQuantity <= 0) return null;
-  if (!Number.isFinite(percentOff) || percentOff < 0 || percentOff > 100) return null;
-
-  return {
-    min_quantity: minQuantity,
-    percent_off: percentOff,
-  };
+  const normalizedTier = normalizeStoredTier(tier);
+  if (!normalizedTier) return null;
+  return normalizedTier;
 };
 
 const buildProductTierProjection = (discounts, productId) => {
   const byMinQuantity = new Map();
 
   for (const rule of Array.isArray(discounts) ? discounts : []) {
+    if (rule?.status === "inactive") continue;
     const ruleProductIds = getRuleProductIds(rule);
     if (!ruleProductIds.includes(productId)) continue;
 

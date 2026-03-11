@@ -3,11 +3,10 @@ import { useFetcher, useLoaderData } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import {
-  buildShopifyAutomaticDiscountTitle,
   QUANTITY_BREAKS_KEY,
   QUANTITY_BREAKS_NAMESPACE,
-  getTierDiscountAllocations,
   getRuleProductIds,
+  normalizeStoredTier,
   normalizeProductIds,
   parseDiscountConfig,
   recomputeProductDiscountProjectionMetafields,
@@ -129,109 +128,20 @@ export const action = async ({ request }) => {
   const shopId = shopJson.data?.shop?.id;
   const currentConfig = parseDiscountConfig(shopJson.data?.shop?.metafield?.value);
 
-  const createdAllocations = [];
-  for (const productId of normalizedProductIds) {
-    const shopifyTitle = buildShopifyAutomaticDiscountTitle(discountTitle, productId);
-    const discountResponse = await admin.graphql(
-      `#graphql
-        mutation CreateQuantityBreakAutomaticDiscount($automaticBasicDiscount: DiscountAutomaticBasicInput!) {
-          discountAutomaticBasicCreate(automaticBasicDiscount: $automaticBasicDiscount) {
-            automaticDiscountNode {
-              id
-            }
-            userErrors {
-              field
-              message
-            }
-          }
-        }
-      `,
-      {
-        variables: {
-          automaticBasicDiscount: {
-            title: shopifyTitle,
-            startsAt: new Date().toISOString(),
-            combinesWith: {
-              productDiscounts: true,
-              orderDiscounts: true,
-              shippingDiscounts: true,
-            },
-            minimumRequirement: {
-              quantity: {
-                greaterThanOrEqualToQuantity: String(minimumQuantity),
-              },
-            },
-            customerGets: {
-              value: {
-                percentage: percentOff / 100,
-              },
-              items: {
-                products: {
-                  productsToAdd: [productId],
-                },
-              },
-            },
-          },
-        },
-      },
-    );
-
-    const discountJson = await discountResponse.json();
-    const discountErrors = discountJson.data?.discountAutomaticBasicCreate?.userErrors || [];
-
-    if (discountErrors.length > 0) {
-      return {
-        ok: false,
-        errors: discountErrors.map((error) => error.message),
-      };
-    }
-
-    const discountId = discountJson.data?.discountAutomaticBasicCreate?.automaticDiscountNode?.id;
-    if (!discountId) {
-      return { ok: false, errors: ["Failed to create tier discount in Shopify."] };
-    }
-
-    createdAllocations.push({
-      product_id: productId,
-      discount_id: discountId,
-      shopify_title: shopifyTitle,
-    });
-  }
-
-  const newTier = {
+  const newTier = normalizeStoredTier({
     min_quantity: minimumQuantity,
     percent_off: percentOff,
     title: discountTitle,
-    discount_allocations: createdAllocations,
-  };
+  });
+
+  if (!newTier) {
+    return { ok: false, errors: ["Discount tier is invalid."] };
+  }
 
   const nextDiscounts = [...(currentConfig.discounts || [])];
   const existingIndex = nextDiscounts.findIndex((discount) => discount?.title === title);
   const previousRuleProductIds =
     existingIndex >= 0 ? getRuleProductIds(nextDiscounts[existingIndex]) : [];
-  const existingRuleStatus =
-    existingIndex >= 0 && nextDiscounts[existingIndex]?.status === "inactive"
-      ? "inactive"
-      : "active";
-
-  if (existingRuleStatus === "inactive" && createdAllocations.length > 0) {
-    for (const allocation of createdAllocations) {
-      await admin.graphql(
-        `#graphql
-          mutation DeactivateQuantityBreakTier($id: ID!) {
-            discountAutomaticDeactivate(id: $id) {
-              userErrors {
-                field
-                message
-              }
-            }
-          }
-        `,
-        { variables: { id: allocation.discount_id } },
-      );
-    }
-  }
-
   if (existingIndex >= 0) {
     const currentTiers = Array.isArray(nextDiscounts[existingIndex].tiers)
       ? nextDiscounts[existingIndex].tiers
@@ -241,13 +151,7 @@ export const action = async ({ request }) => {
       title,
       products: normalizedProductIds,
       status: nextDiscounts[existingIndex]?.status || "active",
-      tiers: [
-        ...currentTiers.map((tier) => ({
-          ...tier,
-          discount_allocations: getTierDiscountAllocations(tier, normalizedProductIds),
-        })),
-        newTier,
-      ],
+      tiers: [...currentTiers.map((tier) => normalizeStoredTier(tier)).filter(Boolean), newTier],
     };
   } else {
     nextDiscounts.push({

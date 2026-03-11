@@ -1,0 +1,17 @@
+api_version = "2026-01"
+
+[[extensions]]
+name = "Quantity Breaks"
+handle = "quantity-breaks-discount"
+type = "function"
+uid = "8b5d80e7-60a9-c650-e8d0-0a71b02b18001268297b"
+description = "Backend quantity break discounts"
+
+  [[extensions.targeting]]
+  target = "cart.lines.discounts.generate.run"
+  input_query = "src/cart_lines_discounts_generate_run.graphql"
+  export = "cart-lines-discounts-generate-run"
+
+  [extensions.build]
+  command = ""
+  path = "dist/function.wasm"
