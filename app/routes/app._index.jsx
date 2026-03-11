@@ -407,12 +407,15 @@ export default function QuantityBreaksIndexPage() {
               value={title}
               onInput={(event) => setTitle(event.currentTarget.value)}
             />
+            <s-stack>
             <s-text-field
-              label="Discount title"
+              label="Discount tier 1 title"
               name="discountTitle"
               value={discountTitle}
               onInput={(event) => setDiscountTitle(event.currentTarget.value)}
             />
+            <s-text color="subdued">This is what customers see in checkout. You can create more tiers after saving.</s-text>
+            </s-stack>
             <s-number-field
               label="Minimum product quantity"
               name="minimumQuantity"
