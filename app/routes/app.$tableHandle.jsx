@@ -163,6 +163,21 @@ const cloneEditorState = (state) => ({
   products: cloneProducts(state?.products || []),
 });
 
+const toComparableState = (state) => ({
+  title: String(state?.title || "").trim(),
+  status: state?.status === "inactive" ? "inactive" : "active",
+  tiers: (Array.isArray(state?.tiers) ? state.tiers : []).map((tier) => ({
+    title: String(tier?.title || "").trim(),
+    min_quantity: String(tier?.min_quantity ?? "").trim(),
+    percent_off: String(tier?.percent_off ?? "").trim(),
+    discount_id: String(tier?.discount_id || "").trim(),
+  })),
+  products: normalizeProductIds(state?.products),
+});
+
+const editorStatesMatch = (a, b) =>
+  JSON.stringify(toComparableState(a)) === JSON.stringify(toComparableState(b));
+
 export const loader = async ({ request, params }) => {
   const { admin } = await authenticate.admin(request);
 
@@ -725,6 +740,7 @@ export default function QuantityBreakRulePage() {
   const navigate = useNavigate();
   const shopify = useAppBridge();
   const ruleFormRef = useRef(null);
+  const mutationInputRef = useRef(null);
   const tiersInputRef = useRef(null);
   const productsInputRef = useRef(null);
   const lastSuccessKeyRef = useRef("");
@@ -739,39 +755,53 @@ export default function QuantityBreakRulePage() {
   const [tiers, setTiers] = useState(initialState.tiers);
   const [products, setProducts] = useState(initialState.products);
 
+  const resetMutationInput = () => {
+    const mutationInput = mutationInputRef.current;
+    if (!mutationInput) return;
+    mutationInput.value = "0";
+    mutationInput.defaultValue = "0";
+  };
+
   const handleDeleteRule = () => {
     const deleteData = new FormData();
     deleteData.set("_action", "delete-rule");
     fetcher.submit(deleteData, { method: "post" });
   };
 
-  const triggerSaveBar = () => {
-    const form = ruleFormRef.current;
-    if (!form) return;
-    form.dispatchEvent(new Event("input", { bubbles: true }));
-    form.dispatchEvent(new Event("change", { bubbles: true }));
+  const showSaveBarNow = () => {
+    if (!shopify?.saveBar?.show) return;
+    shopify.saveBar.show();
   };
 
-  const triggerTiersSaveBar = (nextTiers) => {
-    const tiersInput = tiersInputRef.current;
-    if (!tiersInput) {
-      triggerSaveBar();
-      return;
+  const triggerFieldSaveBar = (input, nextValue) => {
+    const form = ruleFormRef.current;
+    if (input) {
+      input.value = nextValue;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
     }
-    tiersInput.value = JSON.stringify(nextTiers);
-    tiersInput.dispatchEvent(new Event("input", { bubbles: true }));
-    tiersInput.dispatchEvent(new Event("change", { bubbles: true }));
+    if (form) {
+      form.dispatchEvent(new Event("input", { bubbles: true }));
+      form.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    showSaveBarNow();
   };
 
   const triggerProductsSaveBar = (nextProducts) => {
-    const productsInput = productsInputRef.current;
-    if (!productsInput) {
-      triggerSaveBar();
-      return;
+    triggerFieldSaveBar(productsInputRef.current, serializeProductIds(nextProducts));
+  };
+
+  const triggerTiersSaveBar = (nextTiers) => {
+    triggerFieldSaveBar(tiersInputRef.current, JSON.stringify(nextTiers));
+  };
+
+  const triggerMutationSaveBar = () => {
+    const mutationInput = mutationInputRef.current;
+    const nextKey = String(Date.now());
+    if (mutationInput) {
+      mutationInput.defaultValue = "0";
     }
-    productsInput.value = serializeProductIds(nextProducts);
-    productsInput.dispatchEvent(new Event("input", { bubbles: true }));
-    productsInput.dispatchEvent(new Event("change", { bubbles: true }));
+    triggerFieldSaveBar(mutationInput, nextKey);
   };
 
   const restoreCommittedState = () => {
@@ -780,6 +810,7 @@ export default function QuantityBreakRulePage() {
     setStatus(snapshot.status);
     setTiers(snapshot.tiers);
     setProducts(snapshot.products);
+    resetMutationInput();
     currentStateRef.current = snapshot;
   };
 
@@ -794,7 +825,6 @@ export default function QuantityBreakRulePage() {
           : tier,
       ),
     );
-    triggerSaveBar();
   };
 
   const handleAddTier = () => {
@@ -808,7 +838,7 @@ export default function QuantityBreakRulePage() {
           discount_id: "",
         },
       ];
-      setTimeout(() => triggerTiersSaveBar(next), 0);
+      showSaveBarNow();
       return next;
     });
   };
@@ -817,7 +847,8 @@ export default function QuantityBreakRulePage() {
     setTiers((current) => {
       if (current.length <= 1) return current;
       const next = current.filter((_, tierIndex) => tierIndex !== index);
-      setTimeout(() => triggerTiersSaveBar(next), 0);
+      triggerTiersSaveBar(next);
+      triggerMutationSaveBar();
       return next;
     });
   };
@@ -826,7 +857,8 @@ export default function QuantityBreakRulePage() {
     setProducts((current) => {
       if (current.length <= 1) return current;
       const next = current.filter((product) => product.id !== productId);
-      setTimeout(() => triggerProductsSaveBar(next), 0);
+      triggerProductsSaveBar(next);
+      triggerMutationSaveBar();
       return next;
     });
   };
@@ -865,7 +897,8 @@ export default function QuantityBreakRulePage() {
       }
       const next = Array.from(mergedById.values());
       if (next.length === current.length) return current;
-      setTimeout(() => triggerProductsSaveBar(next), 0);
+      triggerProductsSaveBar(next);
+      triggerMutationSaveBar();
       return next;
     });
   };
@@ -873,6 +906,16 @@ export default function QuantityBreakRulePage() {
   useEffect(() => {
     currentStateRef.current = cloneEditorState({ title, status, tiers, products });
   }, [products, status, tiers, title]);
+
+  useEffect(() => {
+    if (!shopify?.saveBar) return;
+    const hasUnsavedChanges = !editorStatesMatch(currentStateRef.current, committedStateRef.current);
+    if (hasUnsavedChanges) {
+      shopify.saveBar.show();
+      return;
+    }
+    shopify.saveBar.hide();
+  }, [products, shopify, status, tiers, title]);
 
   useEffect(() => {
     if (!fetcher.data) return;
@@ -902,10 +945,12 @@ export default function QuantityBreakRulePage() {
       setStatus(nextState.status);
       setProducts(nextState.products);
       setTiers(nextState.tiers);
+      resetMutationInput();
       setSavedHeadingTitle(nextState.title);
       setSavedTierCount(nextState.tiers.length);
       currentStateRef.current = cloneEditorState(nextState);
       committedStateRef.current = cloneEditorState(nextState);
+      if (shopify?.saveBar?.hide) shopify.saveBar.hide();
       if (fetcher.data.nextHandle && fetcher.data.nextHandle !== data.tableHandle) {
         navigate(`/app/${fetcher.data.nextHandle}`, { replace: true });
       }
@@ -924,10 +969,12 @@ export default function QuantityBreakRulePage() {
     setStatus(nextState.status);
     setProducts(nextState.products);
     setTiers(nextState.tiers);
+    resetMutationInput();
     setSavedTierCount(nextState.tiers.length);
     currentStateRef.current = cloneEditorState(nextState);
     committedStateRef.current = cloneEditorState(nextState);
-  }, [data]);
+    if (shopify?.saveBar?.hide) shopify.saveBar.hide();
+  }, [data, shopify]);
 
   if (data.notFound) {
     return (
@@ -945,22 +992,46 @@ export default function QuantityBreakRulePage() {
     );
   }
 
+  const serializedProducts = serializeProductIds(products);
+
   return (
     <s-page heading="Discount rule" inlineSize="small">
       <s-stack direction="block" gap="base">
-        <fetcher.Form
+        <form
           method="post"
           id="rule-settings-form"
           data-save-bar
           ref={ruleFormRef}
+          onSubmit={(event) => {
+            event.preventDefault();
+            const form = event.currentTarget;
+            fetcher.submit(new FormData(form), { method: "post" });
+          }}
           onReset={(event) => {
             event.preventDefault();
             restoreCommittedState();
           }}
         >
           <input type="hidden" name="_action" value="update-rule-settings" />
-          <input ref={productsInputRef} type="hidden" name="products" value={serializeProductIds(products)} />
+          <input
+            ref={mutationInputRef}
+            type="text"
+            name="_mutationKey"
+            defaultValue="0"
+            tabIndex={-1}
+            aria-hidden="true"
+            autoComplete="off"
+            style={{
+              position: "absolute",
+              opacity: 0,
+              pointerEvents: "none",
+              inlineSize: "1px",
+              blockSize: "1px",
+              inset: 0,
+            }}
+          />
           <input ref={tiersInputRef} type="hidden" name="tiers" value={JSON.stringify(tiers)} />
+          <input ref={productsInputRef} type="hidden" name="products" value={serializedProducts} />
 
           <s-stack direction="block" gap="base">
             <s-stack direction="inline" alignItems="center" justifyContent="space-between" gap="small-100">
@@ -981,7 +1052,6 @@ export default function QuantityBreakRulePage() {
                   value={title}
                   onInput={(event) => {
                     setTitle(event.currentTarget?.value ?? "");
-                    triggerSaveBar();
                   }}
                 />
                 <s-select
@@ -990,7 +1060,6 @@ export default function QuantityBreakRulePage() {
                   value={status}
                   onChange={(event) => {
                     setStatus(event.currentTarget.value);
-                    triggerSaveBar();
                   }}
                 >
                   <s-option value="active">Active</s-option>
@@ -1119,7 +1188,7 @@ export default function QuantityBreakRulePage() {
               </s-stack>
             </s-section>
           </s-stack>
-        </fetcher.Form>
+        </form>
       </s-stack>
     </s-page>
   );
