@@ -511,8 +511,6 @@ export const action = async ({ request, params }) => {
         items: {
           products: productsInput,
         },
-        appliesOnOneTimePurchase: true,
-        appliesOnSubscription: false,
       },
     };
 

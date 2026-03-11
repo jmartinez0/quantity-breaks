@@ -161,12 +161,10 @@ export const action = async ({ request }) => {
               percentage: percentOff / 100,
             },
             items: {
-                products: {
-                  productsToAdd: normalizedProductIds,
-                },
+              products: {
+                productsToAdd: normalizedProductIds,
               },
-            appliesOnOneTimePurchase: true,
-            appliesOnSubscription: false,
+            },
           },
         },
       },
