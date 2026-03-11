@@ -43,6 +43,76 @@ export const normalizeProductIds = (products) =>
     ),
   );
 
+export const normalizeTierDiscountAllocations = (allocations) =>
+  Array.from(
+    (Array.isArray(allocations) ? allocations : [])
+      .map((allocation) => {
+        const productId = normalizeProductId(allocation?.product_id);
+        const discountId =
+          typeof allocation?.discount_id === "string" ? allocation.discount_id.trim() : "";
+        const shopifyTitle =
+          typeof allocation?.shopify_title === "string" ? allocation.shopify_title : "";
+
+        if (!productId || !discountId) return null;
+        return {
+          product_id: productId,
+          discount_id: discountId,
+          ...(shopifyTitle ? { shopify_title: shopifyTitle } : {}),
+        };
+      })
+      .filter(Boolean)
+      .reduce((acc, allocation) => {
+        if (!acc.has(allocation.product_id)) {
+          acc.set(allocation.product_id, allocation);
+        }
+        return acc;
+      }, new Map())
+      .values(),
+  );
+
+export const getTierDiscountAllocations = (tier = {}, fallbackProductIds = []) => {
+  const allocations = normalizeTierDiscountAllocations(tier?.discount_allocations);
+  if (allocations.length > 0) return allocations;
+
+  if (
+    typeof tier?.discount_id === "string" &&
+    tier.discount_id.trim() &&
+    Array.isArray(fallbackProductIds) &&
+    fallbackProductIds.length === 1
+  ) {
+    return [
+      {
+        product_id: fallbackProductIds[0],
+        discount_id: tier.discount_id.trim(),
+      },
+    ];
+  }
+
+  return [];
+};
+
+export const getTierDiscountIds = (tier = {}, fallbackProductIds = []) =>
+  getTierDiscountAllocations(tier, fallbackProductIds)
+    .map((allocation) => allocation.discount_id)
+    .filter(Boolean);
+
+const INVISIBLE_TITLE_ALPHABET = ["\u200B", "\u200C", "\u200D", "\u2060"];
+const INVISIBLE_TITLE_SEPARATOR = "\u2063";
+
+const encodeInvisibleProductToken = (productId) => {
+  const numericPart = String(productId || "").split("/").pop() || "0";
+  return numericPart
+    .split("")
+    .map((digit) => {
+      const index = Number.parseInt(digit, 10);
+      return Number.isInteger(index) ? INVISIBLE_TITLE_ALPHABET[index % 4] : INVISIBLE_TITLE_ALPHABET[0];
+    })
+    .join("");
+};
+
+export const buildShopifyAutomaticDiscountTitle = (baseTitle, productId) =>
+  `${String(baseTitle || "").trim()}${INVISIBLE_TITLE_SEPARATOR}${encodeInvisibleProductToken(productId)}`;
+
 export const getRuleProductIds = (rule = {}) => {
   const directProductIds = normalizeProductIds(rule.products);
   if (directProductIds.length > 0) return directProductIds;

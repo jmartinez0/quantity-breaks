@@ -3,8 +3,11 @@ import { useFetcher, useLoaderData, useNavigate } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import {
+  buildShopifyAutomaticDiscountTitle,
   QUANTITY_BREAKS_KEY,
   QUANTITY_BREAKS_NAMESPACE,
+  getTierDiscountAllocations,
+  getTierDiscountIds,
   getRuleProductIds,
   parseDiscountConfig,
   recomputeProductDiscountProjectionMetafields,
@@ -47,8 +50,35 @@ const normalizeProductIds = (products) =>
     new Set(
       (Array.isArray(products) ? products : [])
         .map((product) => normalizeProductId(product))
-        .filter(Boolean),
+      .filter(Boolean),
     ),
+  );
+
+const normalizeTierDiscountAllocations = (allocations) =>
+  Array.from(
+    (Array.isArray(allocations) ? allocations : [])
+      .map((allocation) => {
+        const productId = normalizeProductId(allocation?.product_id);
+        const discountId =
+          typeof allocation?.discount_id === "string" ? allocation.discount_id.trim() : "";
+
+        if (!productId || !discountId) return null;
+        return {
+          product_id: productId,
+          discount_id: discountId,
+          ...(typeof allocation?.shopify_title === "string" && allocation.shopify_title
+            ? { shopify_title: allocation.shopify_title }
+            : {}),
+        };
+      })
+      .filter(Boolean)
+      .reduce((acc, allocation) => {
+        if (!acc.has(allocation.product_id)) {
+          acc.set(allocation.product_id, allocation);
+        }
+        return acc;
+      }, new Map())
+      .values(),
   );
 
 const getProductImageUrl = (product) =>
@@ -147,6 +177,7 @@ const normalizeTierForEditor = (tier = {}) => ({
       ? ""
       : String(tier.percent_off),
   discount_id: typeof tier.discount_id === "string" ? tier.discount_id : "",
+  discount_allocations: normalizeTierDiscountAllocations(tier.discount_allocations),
 });
 
 const buildEditorState = (source) => ({
@@ -171,6 +202,7 @@ const toComparableState = (state) => ({
     min_quantity: String(tier?.min_quantity ?? "").trim(),
     percent_off: String(tier?.percent_off ?? "").trim(),
     discount_id: String(tier?.discount_id || "").trim(),
+    discount_allocations: normalizeTierDiscountAllocations(tier?.discount_allocations),
   })),
   products: normalizeProductIds(state?.products),
 });
@@ -265,9 +297,13 @@ export const action = async ({ request, params }) => {
 
     const rule = discounts[ruleIndex] || {};
     const affectedProductIds = getRuleProductIds(rule);
-    const discountIds = (Array.isArray(rule.tiers) ? rule.tiers : [])
-      .map((tier) => tier?.discount_id)
-      .filter((id) => typeof id === "string" && id.length > 0);
+    const discountIds = Array.from(
+      new Set(
+        (Array.isArray(rule.tiers) ? rule.tiers : []).flatMap((tier) =>
+          getTierDiscountIds(tier, affectedProductIds),
+        ),
+      ),
+    );
 
     for (const discountId of discountIds) {
       const deleteResponse = await admin.graphql(
@@ -440,85 +476,139 @@ export const action = async ({ request, params }) => {
   const rule = discounts[ruleIndex] || {};
   const previousTiers = Array.isArray(rule.tiers) ? rule.tiers : [];
   const previousProductIds = getRuleProductIds(rule);
-  const sortedPreviousProductIds = [...previousProductIds].sort();
-  const sortedNextProductIds = [...productIds].sort();
-  const productsChanged =
-    sortedPreviousProductIds.length !== sortedNextProductIds.length ||
-    sortedPreviousProductIds.some((id, index) => id !== sortedNextProductIds[index]);
-  const addedProductIds = productIds.filter((id) => !previousProductIds.includes(id));
-  const removedProductIds = previousProductIds.filter((id) => !productIds.includes(id));
-  const previousDiscountIds = previousTiers
-    .map((tier) => tier?.discount_id)
-    .filter((id) => typeof id === "string" && id.length > 0);
-  const previousTierByDiscountId = new Map(
-    previousTiers
-      .filter((tier) => typeof tier?.discount_id === "string" && tier.discount_id.length > 0)
-      .map((tier) => [tier.discount_id, tier]),
+  const previousDiscountIds = Array.from(
+    new Set(previousTiers.flatMap((tier) => getTierDiscountIds(tier, previousProductIds))),
   );
   const tiersWithDiscountIds = [];
   for (const tier of nextTiers) {
-    const hasExistingDiscountId =
-      typeof tier.discount_id === "string" && tier.discount_id.length > 0;
-    const previousTier = hasExistingDiscountId
-      ? previousTierByDiscountId.get(tier.discount_id)
-      : null;
+    const normalizedExistingAllocations = getTierDiscountAllocations(tier, productIds);
+    const normalizedPreviousAllocations = getTierDiscountAllocations(
+      previousTiers.find((previousTier) => {
+        const previousTitle = String(previousTier?.title || "").trim();
+        const previousMinQuantity = Number.parseInt(
+          String(previousTier?.min_quantity || "").trim(),
+          10,
+        );
+        const previousPercentOff = Number.parseInt(
+          String(previousTier?.percent_off || "").trim(),
+          10,
+        );
+
+        return (
+          previousTitle === tier.title &&
+          previousMinQuantity === tier.min_quantity &&
+          previousPercentOff === tier.percent_off
+        );
+      }) || {},
+      previousProductIds,
+    );
+    const previousAllocationByProductId = new Map(
+      normalizedPreviousAllocations.map((allocation) => [allocation.product_id, allocation]),
+    );
+    const existingAllocationByProductId = new Map(
+      normalizedExistingAllocations.map((allocation) => [allocation.product_id, allocation]),
+    );
+    const previousTier = previousTiers.find((candidate) =>
+      normalizedPreviousAllocations.some(
+        (allocation) =>
+          allocation.discount_id &&
+          getTierDiscountAllocations(candidate, previousProductIds).some(
+            (candidateAllocation) => candidateAllocation.discount_id === allocation.discount_id,
+          ),
+      ),
+    );
     const tierChanged =
       !previousTier ||
       String(previousTier.title || "").trim() !== tier.title ||
       Number.parseInt(String(previousTier.min_quantity || "").trim(), 10) !== tier.min_quantity ||
       Number.parseInt(String(previousTier.percent_off || "").trim(), 10) !== tier.percent_off;
-    const shouldCreateDiscount = !hasExistingDiscountId;
-    const shouldUpdateExistingDiscount =
-      hasExistingDiscountId && (tierChanged || productsChanged);
+    const nextAllocations = [];
 
-    if (!shouldCreateDiscount && !shouldUpdateExistingDiscount) {
-      tiersWithDiscountIds.push(tier);
-      continue;
-    }
-
-    if (productIds.length === 0) {
-      return {
-        ok: false,
-        errors: ["This rule must have at least one product."],
+    for (const productId of productIds) {
+      const previousAllocation = previousAllocationByProductId.get(productId);
+      const existingAllocation = existingAllocationByProductId.get(productId);
+      const shopifyTitle = buildShopifyAutomaticDiscountTitle(tier.title, productId);
+      const discountInputBase = {
+        title: shopifyTitle,
+        combinesWith: {
+          productDiscounts: true,
+          orderDiscounts: true,
+          shippingDiscounts: true,
+        },
+        minimumRequirement: {
+          quantity: {
+            greaterThanOrEqualToQuantity: String(tier.min_quantity),
+          },
+        },
+        customerGets: {
+          value: {
+            percentage: tier.percent_off / 100,
+          },
+          items: {
+            products: {
+              productsToAdd: [productId],
+            },
+          },
+        },
       };
-    }
 
-    const productsInput = shouldUpdateExistingDiscount && productsChanged
-      ? {
-          ...(addedProductIds.length > 0 ? { productsToAdd: addedProductIds } : {}),
-          ...(removedProductIds.length > 0 ? { productsToRemove: removedProductIds } : {}),
+      const shouldUpdateExistingDiscount =
+        Boolean(previousAllocation?.discount_id || existingAllocation?.discount_id) && tierChanged;
+      const reusableDiscountId =
+        previousAllocation?.discount_id || existingAllocation?.discount_id || "";
+
+      if (reusableDiscountId && !shouldUpdateExistingDiscount) {
+        nextAllocations.push({
+          product_id: productId,
+          discount_id: reusableDiscountId,
+          shopify_title: shopifyTitle,
+        });
+        continue;
+      }
+
+      if (shouldUpdateExistingDiscount) {
+        const updateResponse = await admin.graphql(
+          `#graphql
+            mutation UpdateTierAutomaticDiscount($id: ID!, $automaticBasicDiscount: DiscountAutomaticBasicInput!) {
+              discountAutomaticBasicUpdate(id: $id, automaticBasicDiscount: $automaticBasicDiscount) {
+                automaticDiscountNode {
+                  id
+                }
+                userErrors {
+                  field
+                  message
+                }
+              }
+            }
+          `,
+          {
+            variables: {
+              id: reusableDiscountId,
+              automaticBasicDiscount: discountInputBase,
+            },
+          },
+        );
+        const updateJson = await updateResponse.json();
+        const updateErrors = updateJson.data?.discountAutomaticBasicUpdate?.userErrors || [];
+        if (updateErrors.length > 0) {
+          return {
+            ok: false,
+            errors: updateErrors.map((error) => error.message),
+          };
         }
-      : {
-          productsToAdd: productIds,
-        };
 
-    const discountInputBase = {
-      title: tier.title,
-      combinesWith: {
-        productDiscounts: true,
-        orderDiscounts: true,
-        shippingDiscounts: true,
-      },
-      minimumRequirement: {
-        quantity: {
-          greaterThanOrEqualToQuantity: String(tier.min_quantity),
-        },
-      },
-      customerGets: {
-        value: {
-          percentage: tier.percent_off / 100,
-        },
-        items: {
-          products: productsInput,
-        },
-      },
-    };
+        nextAllocations.push({
+          product_id: productId,
+          discount_id: reusableDiscountId,
+          shopify_title: shopifyTitle,
+        });
+        continue;
+      }
 
-    if (shouldUpdateExistingDiscount) {
-      const updateResponse = await admin.graphql(
+      const createResponse = await admin.graphql(
         `#graphql
-          mutation UpdateTierAutomaticDiscount($id: ID!, $automaticBasicDiscount: DiscountAutomaticBasicInput!) {
-            discountAutomaticBasicUpdate(id: $id, automaticBasicDiscount: $automaticBasicDiscount) {
+          mutation CreateTierAutomaticDiscount($automaticBasicDiscount: DiscountAutomaticBasicInput!) {
+            discountAutomaticBasicCreate(automaticBasicDiscount: $automaticBasicDiscount) {
               automaticDiscountNode {
                 id
               }
@@ -531,70 +621,47 @@ export const action = async ({ request, params }) => {
         `,
         {
           variables: {
-            id: tier.discount_id,
-            automaticBasicDiscount: discountInputBase,
+            automaticBasicDiscount: {
+              ...discountInputBase,
+              startsAt: new Date().toISOString(),
+            },
           },
         },
       );
-      const updateJson = await updateResponse.json();
-      const updateErrors = updateJson.data?.discountAutomaticBasicUpdate?.userErrors || [];
-      if (updateErrors.length > 0) {
+      const createJson = await createResponse.json();
+      const createErrors = createJson.data?.discountAutomaticBasicCreate?.userErrors || [];
+      if (createErrors.length > 0) {
         return {
           ok: false,
-          errors: updateErrors.map((error) => error.message),
+          errors: createErrors.map((error) => error.message),
         };
       }
-      tiersWithDiscountIds.push(tier);
-      continue;
-    }
 
-    const createResponse = await admin.graphql(
-      `#graphql
-        mutation CreateTierAutomaticDiscount($automaticBasicDiscount: DiscountAutomaticBasicInput!) {
-          discountAutomaticBasicCreate(automaticBasicDiscount: $automaticBasicDiscount) {
-            automaticDiscountNode {
-              id
-            }
-            userErrors {
-              field
-              message
-            }
-          }
-        }
-      `,
-      {
-        variables: {
-          automaticBasicDiscount: {
-            ...discountInputBase,
-            startsAt: new Date().toISOString(),
-          },
-        },
-      },
-    );
-    const createJson = await createResponse.json();
-    const createErrors = createJson.data?.discountAutomaticBasicCreate?.userErrors || [];
-    if (createErrors.length > 0) {
-      return {
-        ok: false,
-        errors: createErrors.map((error) => error.message),
-      };
-    }
+      const createdDiscountId =
+        createJson.data?.discountAutomaticBasicCreate?.automaticDiscountNode?.id;
+      if (!createdDiscountId) {
+        return { ok: false, errors: ["Failed to create tier discount in Shopify."] };
+      }
 
-    const createdDiscountId = createJson.data?.discountAutomaticBasicCreate?.automaticDiscountNode?.id;
-    if (!createdDiscountId) {
-      return { ok: false, errors: ["Failed to create tier discount in Shopify."] };
+      nextAllocations.push({
+        product_id: productId,
+        discount_id: createdDiscountId,
+        shopify_title: shopifyTitle,
+      });
     }
 
     tiersWithDiscountIds.push({
       ...tier,
-      discount_id: createdDiscountId,
+      discount_allocations: nextAllocations,
+      discount_id:
+        nextAllocations.length === 1 ? nextAllocations[0].discount_id : "",
     });
   }
 
   nextTiers = tiersWithDiscountIds.sort((a, b) => a.min_quantity - b.min_quantity);
-  const nextDiscountIds = nextTiers
-    .map((tier) => tier?.discount_id)
-    .filter((id) => typeof id === "string" && id.length > 0);
+  const nextDiscountIds = Array.from(
+    new Set(nextTiers.flatMap((tier) => getTierDiscountIds(tier, productIds))),
+  );
 
   const removedDiscountIds = previousDiscountIds.filter(
     (discountId) => !nextDiscountIds.includes(discountId),

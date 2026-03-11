@@ -3,8 +3,10 @@ import { useFetcher, useLoaderData } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import {
+  buildShopifyAutomaticDiscountTitle,
   QUANTITY_BREAKS_KEY,
   QUANTITY_BREAKS_NAMESPACE,
+  getTierDiscountAllocations,
   getRuleProductIds,
   normalizeProductIds,
   parseDiscountConfig,
@@ -127,66 +129,80 @@ export const action = async ({ request }) => {
   const shopId = shopJson.data?.shop?.id;
   const currentConfig = parseDiscountConfig(shopJson.data?.shop?.metafield?.value);
 
-  const discountResponse = await admin.graphql(
-    `#graphql
-      mutation CreateQuantityBreakAutomaticDiscount($automaticBasicDiscount: DiscountAutomaticBasicInput!) {
-        discountAutomaticBasicCreate(automaticBasicDiscount: $automaticBasicDiscount) {
-          automaticDiscountNode {
-            id
-          }
-          userErrors {
-            field
-            message
+  const createdAllocations = [];
+  for (const productId of normalizedProductIds) {
+    const shopifyTitle = buildShopifyAutomaticDiscountTitle(discountTitle, productId);
+    const discountResponse = await admin.graphql(
+      `#graphql
+        mutation CreateQuantityBreakAutomaticDiscount($automaticBasicDiscount: DiscountAutomaticBasicInput!) {
+          discountAutomaticBasicCreate(automaticBasicDiscount: $automaticBasicDiscount) {
+            automaticDiscountNode {
+              id
+            }
+            userErrors {
+              field
+              message
+            }
           }
         }
-      }
-    `,
-    {
-      variables: {
-        automaticBasicDiscount: {
-          title: discountTitle,
-          startsAt: new Date().toISOString(),
-          combinesWith: {
-            productDiscounts: true,
-            orderDiscounts: true,
-            shippingDiscounts: true,
-          },
-          minimumRequirement: {
-            quantity: {
-              greaterThanOrEqualToQuantity: String(minimumQuantity),
+      `,
+      {
+        variables: {
+          automaticBasicDiscount: {
+            title: shopifyTitle,
+            startsAt: new Date().toISOString(),
+            combinesWith: {
+              productDiscounts: true,
+              orderDiscounts: true,
+              shippingDiscounts: true,
             },
-          },
-          customerGets: {
-            value: {
-              percentage: percentOff / 100,
+            minimumRequirement: {
+              quantity: {
+                greaterThanOrEqualToQuantity: String(minimumQuantity),
+              },
             },
-            items: {
-              products: {
-                productsToAdd: normalizedProductIds,
+            customerGets: {
+              value: {
+                percentage: percentOff / 100,
+              },
+              items: {
+                products: {
+                  productsToAdd: [productId],
+                },
               },
             },
           },
         },
       },
-    },
-  );
+    );
 
-  const discountJson = await discountResponse.json();
-  const discountErrors = discountJson.data?.discountAutomaticBasicCreate?.userErrors || [];
+    const discountJson = await discountResponse.json();
+    const discountErrors = discountJson.data?.discountAutomaticBasicCreate?.userErrors || [];
 
-  if (discountErrors.length > 0) {
-    return {
-      ok: false,
-      errors: discountErrors.map((error) => error.message),
-    };
+    if (discountErrors.length > 0) {
+      return {
+        ok: false,
+        errors: discountErrors.map((error) => error.message),
+      };
+    }
+
+    const discountId = discountJson.data?.discountAutomaticBasicCreate?.automaticDiscountNode?.id;
+    if (!discountId) {
+      return { ok: false, errors: ["Failed to create tier discount in Shopify."] };
+    }
+
+    createdAllocations.push({
+      product_id: productId,
+      discount_id: discountId,
+      shopify_title: shopifyTitle,
+    });
   }
 
-  const discountId = discountJson.data?.discountAutomaticBasicCreate?.automaticDiscountNode?.id;
   const newTier = {
     min_quantity: minimumQuantity,
     percent_off: percentOff,
     title: discountTitle,
-    discount_id: discountId,
+    discount_allocations: createdAllocations,
   };
 
   const nextDiscounts = [...(currentConfig.discounts || [])];
@@ -198,20 +214,22 @@ export const action = async ({ request }) => {
       ? "inactive"
       : "active";
 
-  if (existingRuleStatus === "inactive" && discountId) {
-    await admin.graphql(
-      `#graphql
-        mutation DeactivateQuantityBreakTier($id: ID!) {
-          discountAutomaticDeactivate(id: $id) {
-            userErrors {
-              field
-              message
+  if (existingRuleStatus === "inactive" && createdAllocations.length > 0) {
+    for (const allocation of createdAllocations) {
+      await admin.graphql(
+        `#graphql
+          mutation DeactivateQuantityBreakTier($id: ID!) {
+            discountAutomaticDeactivate(id: $id) {
+              userErrors {
+                field
+                message
+              }
             }
           }
-        }
-      `,
-      { variables: { id: discountId } },
-    );
+        `,
+        { variables: { id: allocation.discount_id } },
+      );
+    }
   }
 
   if (existingIndex >= 0) {
@@ -223,7 +241,13 @@ export const action = async ({ request }) => {
       title,
       products: normalizedProductIds,
       status: nextDiscounts[existingIndex]?.status || "active",
-      tiers: [...currentTiers, newTier],
+      tiers: [
+        ...currentTiers.map((tier) => ({
+          ...tier,
+          discount_allocations: getTierDiscountAllocations(tier, normalizedProductIds),
+        })),
+        newTier,
+      ],
     };
   } else {
     nextDiscounts.push({
