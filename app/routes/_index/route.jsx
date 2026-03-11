@@ -4,8 +4,11 @@ import styles from "./styles.module.css";
 
 export const loader = async ({ request }) => {
   const url = new URL(request.url);
+  const hasEmbeddedContext =
+    url.searchParams.get("host") ||
+    url.searchParams.get("embedded") === "1";
 
-  if (url.searchParams.get("shop")) {
+  if (url.searchParams.get("shop") || hasEmbeddedContext) {
     throw redirect(`/app?${url.searchParams.toString()}`);
   }
 
