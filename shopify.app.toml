@@ -1,6 +1,4 @@
-# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
-
-client_id = "e87198fbf753dd708943dd199d8ac07d"
+client_id = "801bab5a06cfa10e71dc9d1787786700"
 name = "Quantity Breaks"
 application_url = "https://jm-quantity-breaks.vercel.app"
 embedded = true
@@ -10,6 +8,18 @@ automatically_update_urls_on_dev = true
 
 [webhooks]
 api_version = "2026-04"
+
+  [[webhooks.subscriptions]]
+  topics = [ "app/uninstalled" ]
+  uri = "/webhooks/app/uninstalled"
+
+  [[webhooks.subscriptions]]
+  topics = [ "app/scopes_update" ]
+  uri = "/webhooks/app/scopes_update"
+
+  [[webhooks.subscriptions]]
+  compliance_topics = ["customers/data_request", "customers/redact", "shop/redact"]
+  uri = "/webhooks"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
